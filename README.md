@@ -1,10 +1,48 @@
 # ゲーム実況・半自動動画エディター
 
-元動画を守りながら、音声解析 → JSON編集計画 → Remotionプレビュー → MP4書き出しを行います。自動判定は候補です。実況とゲームの内容を残すため、カット・倍速・自動字幕は確認後に有効化します。
+ゲーム実況動画を、次の役割分担で編集するプロジェクトです。
 
-## 初回セットアップ
+- **固定スクリプト**: 文字起こし、解析、素材準備、レンダリング
+- **Codex**: 小さいJSONを見て編集判断・`edit_plan.json`更新
+- **Remotion**: 字幕・ズーム・シェイク・フラッシュなどの映像表現
+- **FFmpeg**: 音声抽出、作業用動画生成、メディア処理
 
-Node.js 22以上、npm、Python 3.10以上、FFmpeg / ffprobe、Chromeが必要です。
+大容量動画をCodexのターン内で処理させないことで、Codexの利用量と無駄な長時間ツール実行を抑えます。
+
+---
+
+## 1. なぜこの運用にするのか
+
+907MBのような大容量動画では、以下をCodexから繰り返し実行すると非効率です。
+
+- 元動画全体のSHA-256計算
+- Whisper文字起こし
+- 音声・リアクション解析
+- H.264作業用動画の全編生成
+- Remotionプレビュー
+- 全編レンダリング
+
+この版では、元動画のSHA-256を`size + mtime`が同じ間は再利用し、重い動画処理はCodexから自動実行しない設計にしています。
+
+Codexには主に次の小さいファイルだけを扱わせます。
+
+```text
+work/edit_brief.json
+work/edit_plan.json
+work/transcript.json の必要な区間だけ
+```
+
+---
+
+## 2. 必要環境
+
+- Node.js 22以上
+- npm
+- Python 3.10以上
+- FFmpeg / ffprobe
+- Chrome（Remotion Studio / Render用）
+
+初回セットアップ:
 
 ```sh
 npm ci
@@ -12,123 +50,326 @@ python3 -m venv work/analysis-venv
 work/analysis-venv/bin/python -m pip install -r requirements-analysis.txt
 ```
 
-既存の仮想環境がある場合、作り直す必要はありません。OS全体へのインストールや管理者権限は不要です。`EDITOR_PYTHON` でPythonを指定できます。通常は `work/analysis-venv/bin/python` を自動使用します。
-
-文字起こしモデルは初回だけダウンロードします（動画は送信しません）。
+文字起こしモデルを事前取得する場合:
 
 ```sh
 work/analysis-venv/bin/python scripts/download_model.py
 ```
 
-ダウンロードができなくても、音量・無言解析と編集機能は利用できます。`work/analysis/transcript.json` を手入力する場合は、`[{"id":"u1","start":1.0,"end":2.5,"text":"セリフ","needs_review":false}]` の配列にします。自動再解析で置き換わる前に別名で保存してください。
+---
 
-## 元動画の置き場所
+## 3. 元動画を配置
 
-MP4を `input/` に置きます。拡張子は `.MP4` でも構いません。複数ある場合は一覧を表示し、名前順の最初を選びます。対象を明示するには以下を使います。
+動画は`input/`に置きます。
 
-```sh
-npm run analyze -- --input input/gameplay0307-1.MP4
-npm run plan -- --input input/gameplay0307-1.MP4
+```text
+input/gameplay.mp4
 ```
 
-`input/` と既存 `assets/` は書き換えません。元動画のSHA-256を解析時・レンダリング前後に確認します。ブラウザ再生用H.264コピーや音声は `work/`、新しい完成動画は **`output/`** に保存します。旧FFmpeg版の `outputs/` は保持しています。
+`input/`は読み取り専用として扱います。元動画を上書きしません。
 
-## 動画解析方法
+---
 
-```sh
-npm run analyze
-```
+## 4. Codexへ渡す前の前処理
 
-`work/analysis/` に `video_info.json`、`silence.json`、`transcript.json`、`reactions.json`、`highlights.json` と根拠・原本照合のメタデータを保存します。解析音声は `work/audio/commentary.wav` です。元動画と同じハッシュの文字起こしキャッシュだけを再利用します。再認識は `npm run analyze -- --force-transcribe`。
+### 基本
 
-音声はゲーム音と実況の混合です。話者分離・ゲーム内の失敗判定・移動判定は自動確定しません。叫び声、笑い、ゲーム効果音、固有名詞は聞いて確認してください。
-
-## 編集プラン作成方法
+Codexを起動する前に、自分のターミナルで実行します。
 
 ```sh
-npm run plan
+./scripts/preprocess.sh input/gameplay.mp4
 ```
 
-`work/edit_plan.json` を作成します。既存プランは `work/plan_history/` にバックアップします。再実行すると手修正を含むプランが再生成されるため、必要な版を別名で保管してください。解析対象と異なる動画からプランを生成しようとすると停止します。
+このコマンドは次を行います。
 
-## Remotion Studioで確認する方法
+```text
+input/gameplay.mp4
+       ↓
+Whisper文字起こし
+       ↓
+work/transcript.json
+       ↓
+無言・リアクション・ハイライト解析
+       ↓
+work/analysis/*
+       ↓
+初期編集プラン
+       ↓
+work/edit_plan.json
+       ↓
+Codex向け要約
+       ↓
+work/edit_brief.json
+```
+
+動画のレンダリングは行いません。
+
+### モデルを指定
+
+```sh
+./scripts/preprocess.sh input/gameplay.mp4 --model small
+```
+
+### 編集プランを作り直す
+
+```sh
+./scripts/preprocess.sh input/gameplay.mp4 --replan
+```
+
+既存の手修正済み`edit_plan.json`を不用意に消さないよう、通常は`--replan`を付けないでください。
+
+---
+
+## 5. Remotion用の作業動画を準備
+
+Remotion Studioやプレビューを初めて使う前に、必要な場合だけ実行します。
+
+```sh
+./scripts/preprocess.sh input/gameplay.mp4 --prepare-media
+```
+
+または前処理済みなら:
+
+```sh
+./node_modules/.bin/tsx scripts/remotion.ts prepare-media
+```
+
+これにより、ブラウザで安定して再生するためのH.264コピーを`work/public/media/`へ作成します。
+
+### 重要
+
+`npm run preview`や`npm run studio`は、作業用H.264コピーが存在しない場合に**勝手に907MBの動画全編を再エンコードしません**。
+
+未準備の場合は停止して`prepare-media`を案内します。
+
+これにより、Codexのツール実行中に予期せぬ重い変換が始まることを防ぎます。
+
+---
+
+## 6. Codexへ依頼する
+
+前処理後、Codexには次のように依頼します。
+
+```text
+このゲーム実況動画の編集プランを調整してください。
+
+重要:
+- transcribeを実行しない
+- analyzeを実行しない
+- prepare-mediaを実行しない
+- previewを実行しない
+- renderを実行しない
+- input/*.mp4を直接解析しない
+
+まず work/edit_brief.json と work/edit_plan.json を確認してください。
+字幕が必要な場合だけ work/transcript.json の必要時間帯を確認してください。
+
+通常字幕は work/transcript.json を使用し、
+演出だけ work/edit_plan.json へ追加・修正してください。
+
+作業後は work/edit_plan.json の変更内容と、
+私が確認すべき時間帯だけ教えてください。
+```
+
+`AGENTS.md`にも同じ原則を記載しているため、Codexが重い処理を勝手に連鎖実行しにくくなっています。
+
+---
+
+## 7. 字幕の扱い
+
+ゲーム実況なので、通常字幕は可能な限り表示します。
+
+通常字幕の正本:
+
+```text
+work/transcript.json
+```
+
+例:
+
+```json
+[
+  {
+    "start": 12.1,
+    "end": 14.4,
+    "text": "この先たぶん敵いるんだよね"
+  },
+  {
+    "start": 14.5,
+    "end": 15.4,
+    "text": "うわっ！"
+  }
+]
+```
+
+演出の正本:
+
+```text
+work/edit_plan.json
+```
+
+例:
+
+```json
+{
+  "start": 14.5,
+  "end": 15.2,
+  "type": "effect",
+  "effect": "surprise",
+  "intensity": 0.9,
+  "caption": "うわっ！！",
+  "enabled": true
+}
+```
+
+通常字幕を全部`edit_plan.json`へコピーしないことで、編集プランとCodexコンテキストを小さく保ちます。
+
+---
+
+## 8. プレビューは自分のターミナルで実行
+
+Codexが`edit_plan.json`を変更したら、まず短い区間だけ確認します。
+
+```sh
+npm run preview -- --start 0 --seconds 30
+```
+
+気になる区間だけ確認:
+
+```sh
+npm run preview -- --start 120 --seconds 15
+```
+
+出力:
+
+```text
+output/preview.mp4
+```
+
+プレビューで確認する項目:
+
+- 通常字幕のタイミング
+- 強調字幕の大きさ
+- ズームの強さ
+- シェイクの強さ
+- フラッシュの長さ
+- ゲームUIを字幕が隠していないか
+- カット境界
+- 音声同期
+
+---
+
+## 9. Remotion Studio
+
+作業用H.264動画を準備したあと:
 
 ```sh
 npm run studio
 ```
 
-表示されたローカルURL（通常 `http://localhost:3333`）をブラウザで開き、`GameVideo` を選びます。初回はHEVCなどから作業用動画を生成するため時間がかかります。`DemoVideo` は冒頭30秒の動作見本です。
+通常は次で開けます。
 
-JSONを変更したらStudioを停止して同じコマンドで再起動してください。起動時にプランを検証してpropsに変換します。ブラウザの手動再読込だけではJSONの変更が反映されません。
-
-## edit_plan.jsonを手修正する方法
-
-`start` / `end` は**編集前の元動画の秒数**です。終了時刻は含みません。`enabled:false` は候補を残すだけで動画に適用しません。
-
-```json
-{"id":"my-surprise","start":238.5,"end":239.8,"type":"effect","effect":"surprise","intensity":0.8,"caption":"えっ！？","enabled":true}
+```text
+http://localhost:3333
 ```
 
-これは形式例です。実際の発言を確認して文言と時刻を置き換えてください。ルートの `events` 配列に追加します。`id` は重複不可です。
+Studioはコードで作った動画をブラウザ上で確認するための開発UIです。
 
-- カット：`type:"cut"`。無言候補でもゲーム内容が重要なら無効のまま残します。
-- 倍速・スロー：`type:"speed", rate:2` または `rate:0.7`。
-- 字幕：`type:"caption", caption:"確認済みの発言"`。
-- 静止：`type:"freeze", freezeAt:12.3, holdSeconds:0.3`。
-- 冒頭：`digest.enabled:true`。`clips` に合計5〜8秒、最大3区間を指定します。本編の同じ場面も残ります。
+---
 
-詳細・全フィールド・時間変換の注意点は [編集ガイド](docs/editing-guide.md) を参照してください。
+## 10. 最終レンダリング
 
-## SEの追加方法
-
-利用権限のある音声を `assets/se/` に置きます。イベント例：
-
-```json
-{"id":"se1","start":238.5,"end":239.0,"type":"se","asset":"assets/se/surprise.mp3","volume":0.4}
-```
-
-指定素材がなくても警告だけで書き出しを続行します。標準プランは `config/effects.json` の対応表に従ってSEイベントを作ります。自動でネットから素材を取得しません。
-
-## BGMの追加方法
-
-利用権限のあるBGMを `assets/bgm/` に置き、プランを再生成すると先頭の音声素材を低音量で追加します。手修正で追加する場合：
-
-```json
-{"id":"bgm1","start":0,"end":479.365,"type":"bgm","asset":"assets/bgm/music.mp3","loop":true,"volume":0.045}
-```
-
-`end` は入力の尺に合わせてください。リアクション付近ではBGMを下げます。SE・BGMを追加したら必ず音量バランスをプレビューしてください。
-
-## エフェクト強度の変更方法
-
-`config/editing.json` の `style` を `subtle` / `balanced` / `energetic` / `chaotic` から選びます。初期値は `energetic` と全体係数 `strength:0.82` で、balancedより少し派手です。`effects` の `zoom` / `shake` / `flash` / `captions` / `soundEffects` を0〜1で調整できます。0で該当要素を無効化します。
-
-色、フォント、縁取り、プリセット係数は `config/effects.json`。個々のイベントでは `intensity:0〜1` を指定します。[エフェクト一覧](docs/effects.md) を参照してください。
-
-## プレビュー作成方法
-
-```sh
-npm run preview
-npm run preview -- --start 230 --seconds 15
-```
-
-通常は先頭30秒を960×540で `output/preview.mp4` に保存します。`--start` は**完成タイムラインの秒数**です。上の部分プレビューは230秒から15秒。最初の4エフェクト見本は `npm run demo` → `output/demo.mp4`。
-
-別のプラン：`npm run preview -- --plan work/my_plan.json --seconds 15`。
-
-## 最終レンダリング方法
-
-プレビューで内容・字幕・音声を確認してから実行します。
+現在の編集プランとコードに一致するプレビューを確認してから実行します。
 
 ```sh
 npm run render
 ```
 
-`output/final.mp4` に1920×1080、H.264 / AACを出力します。今回の入力は可変FPS・実質60fpsのため60fps。通常は入力平均FPSを尊重します。新しいプラン・設定・コードのプレビューがない場合、先に短いプレビューを作成します。最終ファイルは書き出し完了後に置き換えます。途中ファイルは `work/` です。
+出力:
 
-全編は短いプレビューより時間と空き容量が必要です。素材の作業コピーは再利用します。レンダリング時に `--plan` で別JSONも指定できます。
+```text
+output/final.mp4
+```
 
-## 検証コマンド
+この版では、最終レンダリング時にプレビューが古い/存在しない場合、勝手にプレビューを追加レンダリングせず停止します。
+
+意図的にプレビュー確認を省略する場合のみ:
+
+```sh
+npm run render -- --skip-preview-check
+```
+
+通常は使用しないことを推奨します。
+
+---
+
+## 11. SHA-256キャッシュ
+
+大容量の元動画を何度も全読みしないため、元動画の識別情報をキャッシュします。
+
+主なキャッシュ/解析情報:
+
+```text
+work/source_identity.json
+work/analysis/video_info.json
+```
+
+以下が変わっていなければ、保存済みSHA-256を再利用します。
+
+- ファイルパス
+- ファイルサイズ
+- 更新日時
+
+これにより、907MBの動画を`transcribe`、`analyze`、`preview`のたびに何度もSHA-256計算する処理を削減します。
+
+元動画が変更された場合は、新しいSHA-256が計算されます。
+
+---
+
+## 12. 各ファイルの役割
+
+| ファイル | 役割 | Codexが通常読むか |
+|---|---|---|
+| `input/*.mp4` | 元動画 | いいえ |
+| `work/edit_brief.json` | 編集候補の要約 | はい |
+| `work/edit_plan.json` | 演出・カット等の編集計画 | はい |
+| `work/transcript.json` | 通常字幕 | 必要区間だけ |
+| `work/analysis/*` | 詳細解析結果 | 原則不要 |
+| `work/public/media/*` | Remotion作業用動画 | いいえ |
+| `output/preview.mp4` | 確認動画 | ユーザーが確認 |
+| `output/final.mp4` | 完成動画 | 最終成果物 |
+
+---
+
+## 13. 個別コマンド
+
+### 文字起こしだけ
+
+```sh
+npm run transcribe -- input/gameplay.mp4
+```
+
+または:
+
+```sh
+python scripts/transcribe.py input/gameplay.mp4 --model small --language ja
+```
+
+### 解析
+
+専用文字起こし結果を再利用して、別のWhisper処理を走らせない:
+
+```sh
+npm run analyze -- --input input/gameplay.mp4 --reuse-transcript
+```
+
+### 初期プラン生成
+
+```sh
+npm run plan -- --input input/gameplay.mp4
+```
+
+### 型・Pythonチェック
 
 ```sh
 npm run typecheck
@@ -137,28 +378,116 @@ npm test
 npm run validate
 ```
 
-`validate` はJSONとComposition読み込み、`test` は時間変換と境界条件を検証します。書き出し後の形式・尺・原本ハッシュは `work/analysis/*_validation.json`、主要フレームは `work/previews/` に保存されます。
+`validate`は作業用H.264動画がなくてもComposition/JSONの検証を行えるようにしています。
 
-## よくあるエラー
+---
 
-- `ffmpeg` / `ffprobe` が見つからない：実行環境のPATHを確認してください。
-- ローカルモデルがない：モデル取得コマンドを実行してください。解析のメタデータに利用不可の理由を保存します。
-- `source hash` の不一致：対象動画を指定して `analyze` → `plan` を実行してください。
-- `Enabled cut/speed/freeze intervals must not overlap`：同じ区間の構造イベントを同時に有効化しないでください。
-- 文字化け・豆腐：日本語フォントをOSで利用可能にし、`config/effects.json` の `fontFamily` を変更してください。今回のmacOSではヒラギノを使用します。
-- Chromeが見つからない：`REMOTION_BROWSER` にChromeの実行ファイルを指定してください。なければRemotionがブラウザ取得を試みるためネット接続が必要です。
-- `EPERM` / ローカル通信が禁止：エージェントの実行サンドボックスでは、Studio・レンダラー・tsx用のローカル通信許可が必要な場合があります。
-- メモリ不足：`config/editing.json` の `render.concurrency` を1に下げてください。
-- SE/BGMが鳴らない：`work/analysis/media_warnings.json` と素材パス、enabled、音量を確認してください。
+## 14. Codex利用量を抑える運用ルール
 
-旧版FFmpeg編集は `python3 scripts/edit.py`。既定プランを `work/legacy/edit_plan_ffmpeg.json` に固定し、新しいオブジェクト形式と分離しています。旧成果物は `outputs/final.mp4` です。
+### やること
 
-設計の正本は [architecture.md](docs/architecture.md)、[editing-guide.md](docs/editing-guide.md)、[effects.md](docs/effects.md)。
+- 重い処理はターミナルで先に実行
+- CodexにはJSON編集を中心に依頼
+- 1回の依頼を1目的にする
+- `edit_brief.json`から候補を絞る
+- 字幕全文ではなく必要時間帯だけ確認
+- 15〜30秒の短いプレビューを使う
+- 作業用動画・文字起こし・解析結果を再利用
 
-## 文字起こしのみ
+### やらないこと
 
-`npm run transcribe`（既定small/ja）または `python scripts/transcribe.py input/gameplay0307-1.MP4 --model small --language ja` で `work/transcript.json` を生成します。`--duration 30` は冒頭30秒だけの確認用です。編集プランやRemotionは変更しません。初回モデル取得にはネット接続が必要です。
+Codexへ次のような依頼をしない:
 
-## エージェント向け編集準備
+```text
+全部解析して、文字起こしして、
+エフェクトを追加して、全編プレビューして、
+問題があれば直して、最終動画まで作って。
+```
 
-`python scripts/prepare_edit.py "input/gameplay0307-1.MP4" --check` で予定を確認し、`--check`を外すと専用文字起こし→解析→初期プランを実行します。既存ローカルモデルを優先し、全編の同一入力字幕だけを解析へ渡します。既存プランは保持、`--replan`指定時だけバックアップ後に再生成します。候補要約は`work/edit_brief.json`。このコマンド自体は動画をレンダリングしません。通常字幕の正本は`work/transcript.json`、演出は`work/edit_plan.json`です。
+代わりに:
+
+```text
+work/edit_brief.json と work/edit_plan.json を確認して、
+120〜180秒の編集だけ改善してください。
+edit_plan.json以外は変更せず、レンダリングもしないでください。
+```
+
+のように範囲を限定します。
+
+---
+
+## 15. 推奨する日常フロー
+
+```text
+① input/に動画を置く
+        ↓
+② ./scripts/preprocess.sh input/gameplay.mp4 --prepare-media
+        ↓
+③ Codexを起動
+        ↓
+④ edit_brief + edit_planだけで編集判断
+        ↓
+⑤ Codexがedit_plan.jsonを更新
+        ↓
+⑥ 自分で15〜30秒preview
+        ↓
+⑦ 必要箇所だけCodexへ修正依頼
+        ↓
+⑧ 自分でpreview
+        ↓
+⑨ npm run render
+```
+
+同じ動画で2回目以降は、文字起こし・SHA-256・作業用動画などのキャッシュを再利用できます。
+
+---
+
+## 16. よくあるエラー
+
+### Browser media is not prepared
+
+先に実行:
+
+```sh
+./node_modules/.bin/tsx scripts/remotion.ts prepare-media
+```
+
+### Current plan/code has no matching preview
+
+現在の編集内容を短く確認:
+
+```sh
+npm run preview -- --start 0 --seconds 30
+```
+
+その後:
+
+```sh
+npm run render
+```
+
+### faster-whisperがない
+
+```sh
+work/analysis-venv/bin/python -m pip install -r requirements-analysis.txt
+```
+
+### ffmpeg / ffprobeがない
+
+PATHとFFmpegのインストールを確認してください。
+
+### メモリ不足
+
+`config/editing.json`の`render.concurrency`を下げてください。
+
+---
+
+## 17. 元動画の保護
+
+元動画は常に`input/`配下で読み取り専用として扱います。
+
+レンダリング前後の軽量な保護チェックは、毎回907MBを再ハッシュするのではなく、ファイルサイズと更新日時で確認します。
+
+SHA-256自体は初回または元動画のメタデータ変更時に計算します。
+
+より厳密な監査が必要な場合は、必要なタイミングで明示的にフルSHA-256を再計算してください。

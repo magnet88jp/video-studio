@@ -14,12 +14,23 @@ function readTranscript(){const p=path.join(WORK,'transcript.json');return fs.ex
 function save(p:string,x:unknown){fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,JSON.stringify(x,null,2)+'\n');}
 function command(cmd:string,args:string[]){const r=spawnSync(cmd,args,{cwd:ROOT,stdio:'inherit'});if(r.status!==0)throw new Error(`${cmd} failed: ${r.status}`);}
 async function hash(p:string){const h=createHash('sha256');for await(const chunk of fs.createReadStream(p))h.update(chunk);return h.digest('hex');}
+function sourceGuard(p:string){const s=fs.statSync(p);return {size:s.size,mtimeMs:s.mtimeMs};}
+function sourceGuardUnchanged(p:string,before:{size:number;mtimeMs:number}){const s=fs.statSync(p);return s.size===before.size&&Math.abs(s.mtimeMs-before.mtimeMs)<1;}
+async function cachedSourceHash(p:string){
+ const stat=fs.statSync(p);const infoPath=path.join(WORK,'analysis/video_info.json');
+ if(fs.existsSync(infoPath)){
+  try{const cached=json(infoPath);const expected=path.resolve(ROOT,cached.source??'');const cachedMtimeMs=Number(cached.sourceMtimeNs??0)/1e6;
+   if(expected===p&&cached.sha256&&Number(cached.sourceSize)===stat.size&&Math.abs(cachedMtimeMs-stat.mtimeMs)<2){console.log('Source SHA-256 cache reused (size/mtime unchanged).');return String(cached.sha256);}
+  }catch{}
+ }
+ console.log('Source metadata changed or cache missing; hashing source once...');return await hash(p);
+}
 function safeSource(s:string){const p=fs.realpathSync(path.resolve(ROOT,s));if(!p.startsWith(path.join(ROOT,'input')+path.sep))throw new Error('source must be a file inside input/');return p;}
 function info(source:string){return JSON.parse(spawnSync('ffprobe',['-v','error','-show_format','-show_streams','-of','json',source],{encoding:'utf8'}).stdout);}
 function fpsOf(i:any){const v=i.streams.find((s:any)=>s.codec_type==='video');const [a,b]=v.avg_frame_rate.split('/').map(Number);const n=a/b;return n>55&&n<=61?60:n>28&&n<=31?30:n>23&&n<25?24:Math.max(1,Math.round(n));}
 async function demoProps():Promise<EditorProps>{
  const files=fs.readdirSync(path.join(ROOT,'input')).filter(p=>/\.mp4$/i.test(p)).sort();if(!files.length)throw new Error('Put an MP4 into input/');
- const source=`input/${files[0]}`;const p=safeSource(source),i=info(p);const sourceHash=await hash(p);
+ const source=`input/${files[0]}`;const p=safeSource(source),i=info(p);const sourceHash=await cachedSourceHash(p);
  const plan=PlanSchema.parse({version:1,source,sourceHash,sourceDuration:Math.min(30,Number(i.format.duration)),settings:{width:1920,height:1080,fps:fpsOf(i)},digest:{enabled:false,clips:[]},events:[],notes:['First 30 seconds effect demonstration']});
  save(path.join(WORK,'demo_plan.json'),plan);
  const filename=`media/demo-${sourceHash.slice(0,12)}.mp4`,target=path.join(PUBLIC,filename);
@@ -27,17 +38,21 @@ async function demoProps():Promise<EditorProps>{
  if(!fs.existsSync(target))command('ffmpeg',['-hide_banner','-v','warning','-nostdin','-n','-i',p,'-t',String(plan.sourceDuration),'-vf',`fps=${plan.settings.fps},scale=-2:1080:flags=lanczos:in_range=full:out_range=limited`,'-c:v','libx264','-crf','18','-preset','fast','-threads','6','-pix_fmt','yuv420p','-c:a','aac','-b:a','256k','-ar','48000','-movflags','+faststart',target]);
  return {plan,media:{[source]:{url:filename}},config:editing};
 }
-async function planProps(planPath:string):Promise<EditorProps>{
- const plan=PlanSchema.parse(json(planPath));const source=safeSource(plan.source),sourceHash=await hash(source),probe=info(source);
+async function planProps(planPath:string,allowMediaBuild=false,requireMedia=true):Promise<EditorProps>{
+ const plan=PlanSchema.parse(json(planPath));const source=safeSource(plan.source),sourceHash=await cachedSourceHash(source),probe=info(source);
  if(plan.sourceHash&&plan.sourceHash!==sourceHash)throw new Error('Plan belongs to a different source hash. Run analyze and plan.');
  if(Math.abs(Number(probe.format.duration)-plan.sourceDuration)>.1)throw new Error('sourceDuration differs from input');
  const filename=`media/source-${sourceHash.slice(0,12)}-${plan.settings.fps}-${plan.settings.height}.mp4`,target=path.join(PUBLIC,filename);
  fs.mkdirSync(path.dirname(target),{recursive:true});
  if(!fs.existsSync(target)){
-  console.log('Preparing H.264 browser copy (original is read-only)...');
-  const partial=target.replace('.mp4','.partial.mp4');
-  command('ffmpeg',['-hide_banner','-v','warning','-nostdin','-y','-i',source,'-vf',`fps=${plan.settings.fps},scale=-2:${plan.settings.height}:flags=lanczos:out_range=limited`,'-c:v','libx264','-crf','18','-preset','fast','-threads','6','-pix_fmt','yuv420p','-c:a','aac','-b:a','256k','-ar','48000','-movflags','+faststart',partial]);
-  fs.renameSync(partial,target);
+  if(allowMediaBuild){
+   console.log('Preparing reusable H.264 browser copy (explicit prepare-media step)...');
+   const partial=target.replace('.mp4','.partial.mp4');
+   command('ffmpeg',['-hide_banner','-v','warning','-nostdin','-y','-i',source,'-vf',`fps=${plan.settings.fps},scale=-2:${plan.settings.height}:flags=lanczos:out_range=limited`,'-c:v','libx264','-crf','18','-preset','fast','-threads','6','-pix_fmt','yuv420p','-c:a','aac','-b:a','256k','-ar','48000','-movflags','+faststart',partial]);
+   fs.renameSync(partial,target);
+  }else if(requireMedia){
+   throw new Error(`Browser media is not prepared: ${target}. Run ./scripts/preprocess.sh <input.mp4> --prepare-media outside Codex, or run: npx tsx scripts/remotion.ts prepare-media`);
+  }
  }
  const media:EditorProps['media']={[plan.source]:{url:filename}};const warnings:string[]=[];
  for(const e of plan.events.filter(e=>e.enabled&&e.asset)){
@@ -60,18 +75,21 @@ async function planProps(planPath:string):Promise<EditorProps>{
  save(path.join(WORK,'resolved_timeline.json'),compileTimeline(plan));return {plan,media,config:editing};
 }
 async function main(){
- const mode=process.argv[2]??'preview';if(!['studio','render','preview','demo','validate'].includes(mode))throw new Error('Unknown mode');
+ const mode=process.argv[2]??'preview';if(!['studio','render','preview','demo','validate','prepare-media'].includes(mode))throw new Error('Unknown mode');
  const args=process.argv.slice(3);function arg(name:string){const i=args.indexOf(name);return i<0?undefined:args[i+1];}
  fs.mkdirSync(PUBLIC,{recursive:true});fs.mkdirSync(path.join(ROOT,'output'),{recursive:true});
- const props:EditorProps={...(mode==='demo'?await demoProps():await planProps(path.resolve(ROOT,arg('--plan')??'work/edit_plan.json'))),transcript:readTranscript()};
- const source=safeSource(props.plan.source),before=await hash(source);
+ const planPath=path.resolve(ROOT,arg('--plan')??'work/edit_plan.json');
+ const base=mode==='demo'?await demoProps():await planProps(planPath,mode==='prepare-media',mode!=='validate');
+ const props:EditorProps={...base,transcript:readTranscript()};
+ const source=safeSource(props.plan.source),before=sourceGuard(source);
  const propsPath=path.join(WORK,'studio_props.json');save(propsPath,props);
+ if(mode==='prepare-media'){console.log('Reusable browser media is ready.');return;}
  if(mode==='studio'){
   fs.watchFile(path.join(WORK,'transcript.json'),{interval:500},()=>{try{props.transcript=readTranscript();save(propsPath,props);}catch(error){console.error('Invalid transcript; keeping last valid subtitles:',error);}});
   const child=spawn(path.join(ROOT,'node_modules/.bin/remotion'),['studio','src/index.ts','--props',propsPath,'--public-dir',PUBLIC,'--port','3333','--no-open'],{stdio:'inherit',env:{...process.env,BROWSER:'none'}});
   child.on('exit',code=>process.exit(code??1));return;
  }
- const serveUrl=await bundle({entryPoint:path.join(ROOT,'src/index.ts'),outDir:path.join(WORK,'remotion-bundle'),publicDir:PUBLIC,enableCaching:false});
+ const serveUrl=await bundle({entryPoint:path.join(ROOT,'src/index.ts'),outDir:path.join(WORK,'remotion-bundle'),publicDir:PUBLIC,enableCaching:true});
  const browserExecutable=process.env.REMOTION_BROWSER??(fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':null);
  const comps=await getCompositions(serveUrl,{inputProps:props,browserExecutable});
  save(path.join(WORK,'analysis/compositions.json'),comps.map(c=>({id:c.id,durationInFrames:c.durationInFrames,fps:c.fps,width:c.width,height:c.height})));
@@ -93,15 +111,16 @@ async function main(){
   const expected=(frameRange?last-first+1:composition!.durationInFrames)/composition!.fps;
   if(v.codec_name!=='h264'||a?.codec_name!=='aac'||Math.abs(Number(v.duration)-expected)>.1)throw new Error('Output codec/duration validation failed');
   if(kind==='final'&&(v.width!==props.plan.settings.width||v.height!==props.plan.settings.height))throw new Error('Resolution mismatch');
-  const after=await hash(source);if(after!==before)throw new Error('Source changed');
-  save(path.join(WORK,`analysis/${kind}_validation.json`),{sourceUnchanged:true,before,after,output,fingerprint,expectedDuration:expected,probe});
+  if(!sourceGuardUnchanged(source,before))throw new Error('Source size/mtime changed during render');
+  save(path.join(WORK,`analysis/${kind}_validation.json`),{sourceUnchanged:true,sourceGuard:before,check:'size+mtime',output,fingerprint,expectedDuration:expected,probe});
   const sampleFrames=kind==='demo'?[4,9.12,15.1,21.03].map(t=>Math.round(t*composition!.fps)):kind==='final'?[0,Math.round(composition!.durationInFrames/2),composition!.durationInFrames-2]:[first,Math.min(last,first+Math.round(3*composition!.fps)),Math.max(first,last-1)];
   for(const frame of sampleFrames)await renderStill({composition:composition!,serveUrl,inputProps:props,browserExecutable,output:path.join(WORK,`previews/${kind}-${frame}.png`),frame,scale:.5});
   console.log(`${kind} ready: ${output}`);
  }
  if(mode==='render'){
   const validation=path.join(WORK,'analysis/preview_validation.json');
-  if(!fs.existsSync(validation)||json(validation).fingerprint!==fingerprint)await render('preview');
+  if((!fs.existsSync(validation)||json(validation).fingerprint!==fingerprint)&&!args.includes('--skip-preview-check'))
+   throw new Error('Current plan/code has no matching preview. Run npm run preview yourself first. To intentionally bypass, add --skip-preview-check.');
   await render('final');
  }else await render(mode==='demo'?'demo':'preview');
 }
