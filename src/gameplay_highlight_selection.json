@@ -1,0 +1,10 @@
+[
+  {"start":179.5,"end":199.0,"priority":1,"title":"バグに気づき、助けを求めて連続リアクション","reason":"『なんかバグってる』『誰が助けてバグっちゃった』という自動認識結果から、相手への呼びかけが続く。192秒・196秒付近の音量上昇を含む。","basis":"transcript_and_loudness","visual_frames":[184,193]},
+  {"start":233.0,"end":244.5,"priority":2,"title":"『やば、俺が死ぬ』の危機リアクション候補","reason":"相手についての発言から、自分の危機を伝える短いリアクションへ変化。235秒・238秒付近の音量上昇を含む。","basis":"transcript_and_loudness","visual_frames":[235.5,238.75,241]},
+  {"start":207.0,"end":218.5,"priority":3,"title":"『強すぎ』から大きな音へ","reason":"『強すぎ』という発言と215秒付近の強い音量ピークが近接。ピークが声か効果音かは要確認。","basis":"transcript_and_loudness","visual_frames":[211,215.15]},
+  {"start":220.5,"end":229.0,"priority":4,"title":"相手への強い反応が続く場面","reason":"短い強い言葉が続き、222〜224秒付近に音量ピークが集中。直前の場面との連続性を確認する候補。","basis":"transcript_and_loudness","visual_frames":[224.45]},
+  {"start":309.0,"end":325.0,"priority":5,"title":"短い声と『なんかヤバい』","reason":"311秒付近の大音量と320秒付近の短い声に続き、『なんかヤバい』と自動認識。リアクションの前後を含めた候補。","basis":"transcript_and_loudness","visual_frames":[311.35,320.95]},
+  {"start":57.0,"end":65.0,"priority":6,"title":"声への驚きと『死んだのこいつ』","reason":"『こいつの声なんかエグい』『死んだのこいつ』という短い発言が続く。59秒・62秒付近の音量上昇と近接。","basis":"transcript_and_loudness","visual_frames":[59.05,62.65]},
+  {"start":130.0,"end":145.5,"priority":7,"title":"『どこいった』から発見・違和感へ","reason":"『どこいった』『あ、あんなところにいる』『なんか顔違くね』と発言が展開。音量最大の場面ではないが、短い展開がある文脈候補。","basis":"transcript_context","visual_frames":[136,140]},
+  {"start":378.5,"end":391.0,"priority":8,"title":"操作の呼びかけから『いけー』へ","reason":"操作に関する発言と呼びかけの繰り返しの後に『いけー』と自動認識。繰り返しの誤認識の可能性があり、優先度を下げた候補。","basis":"transcript_context_low_confidence","visual_frames":[381.25,389]}
+]

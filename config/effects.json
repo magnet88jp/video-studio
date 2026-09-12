@@ -1,0 +1,15 @@
+{
+  "styles": {
+    "subtle": {"zoom": 0.35, "shake": 0.15, "flash": 0.08, "captions": 0.6, "soundEffects": 0.2},
+    "balanced": {"zoom": 0.55, "shake": 0.3, "flash": 0.18, "captions": 0.72, "soundEffects": 0.3},
+    "energetic": {"zoom": 0.8, "shake": 0.5, "flash": 0.3, "captions": 0.95, "soundEffects": 0.43},
+    "chaotic": {"zoom": 1, "shake": 0.85, "flash": 0.45, "captions": 1, "soundEffects": 0.6}
+  },
+  "captions": {"fontSize": 76, "fontFamily": "EditorJapanese, Hiragino Kaku Gothic ProN, sans-serif", "color": "#FFFFFF", "surprise": "#FFE96A", "danger": "#FF6262", "win": "#B6FFB0", "strokeColor": "#17191E", "strokeWidth": 5, "shadow": "0 5px 8px #000A", "bottomPercent": 14},
+  "punchZoom": {"durationSeconds": 0.4, "maxScale": 1.25},
+  "shake": {"minPixels": 2, "maxPixels": 20},
+  "flash": {"durationSeconds": 0.1, "maxOpacity": 0.6},
+  "freeze": {"defaultSeconds": 0.3, "maxSeconds": 1},
+  "redAlert": {"maxOpacity": 0.24},
+  "defaultSe": {"surprise": "assets/se/surprise.mp3", "fail": "assets/se/fail.mp3", "win": "assets/se/success.mp3", "funny": "assets/se/whoosh.mp3"}
+}

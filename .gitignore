@@ -1,0 +1,8 @@
+node_modules/
+work/
+output/
+outputs/
+input/
+__pycache__/
+.DS_Store
+*.pyc

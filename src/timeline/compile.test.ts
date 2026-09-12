@@ -1,0 +1,13 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {PlanSchema} from './schema';
+import {compileTimeline} from './compile';
+const make=(events:unknown[]=[],digest={enabled:false,clips:[] as {start:number;end:number}[]})=>PlanSchema.parse({version:1,source:'input/a.mp4',sourceDuration:20,settings:{width:1920,height:1080,fps:60},digest,events});
+test('disabled candidates preserve every source frame',()=>{const t=compileTimeline(make([{id:'cut',start:2,end:8,type:'cut',enabled:false}]));assert.equal(t.durationInFrames,1200);assert.equal(t.segments.length,1);});
+test('cut and speed map source caption exactly',()=>{const t=compileTimeline(make([{id:'cut',start:2,end:4,type:'cut'},{id:'speed',start:4,end:8,type:'speed',rate:2},{id:'caption',start:6,end:7,type:'caption',caption:'test'}]));assert.equal(t.durationInFrames,960);assert.equal(t.events[0].from,180);assert.equal(t.events[0].durationInFrames,30);});
+test('digest prepends without removing main and obeys scope',()=>{const t=compileTimeline(make([{id:'c',start:11,end:12,type:'caption',caption:'test',scope:'both'}],{enabled:true,clips:[{start:10,end:16}]}));assert.equal(t.durationInFrames,1560);assert.deepEqual(t.events.map(e=>e.from),[60,1020]);});
+test('freeze replaces source interval with explicit held duration',()=>{const t=compileTimeline(make([{id:'f',start:2,end:3,type:'freeze',holdSeconds:.5,freezeAt:2.3}]));assert.equal(t.durationInFrames,1170);assert.equal(t.segments[1].freezeAt,2.3);assert.equal(t.segments[1].durationInFrames,30);});
+test('slow motion duration includes natural audio duration',()=>{const t=compileTimeline(make([{id:'s',start:2,end:4,type:'speed',rate:.5}]));assert.equal(t.durationInFrames,1320);});
+test('fail automatically freezes short interval without extending total',()=>{const t=compileTimeline(make([{id:'f',start:2,end:3,type:'effect',effect:'fail'}]));assert.equal(t.durationInFrames,1200);assert.equal(t.segments.find(s=>s.freezeAt!==undefined)?.durationInFrames,15);});
+test('overlapping structural operations and out-of-bounds are rejected',()=>{assert.throws(()=>make([{id:'a',start:1,end:3,type:'cut'},{id:'b',start:2,end:4,type:'speed',rate:2}]));assert.throws(()=>make([{id:'a',start:19,end:21,type:'cut'}]));});
+test('fractional FPS cumulative rounding has no multi-cut drift',()=>{const p=make(Array.from({length:10},(_,i)=>({id:String(i),start:i+.1,end:i+.2,type:'cut'})));p.settings.fps=29.97;assert.equal(compileTimeline(p).durationInFrames,Math.round(19*29.97));});

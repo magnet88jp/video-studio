@@ -1,0 +1,32 @@
+{
+  "style": "energetic",
+  "strength": 0.82,
+  "width": 1920,
+  "height": 1080,
+  "fps": "source",
+  "silenceThresholdSeconds": 1.2,
+  "silenceDbfs": -40,
+  "speechPaddingSeconds": 0.2,
+  "reactionCooldownSeconds": 12,
+  "maxEffectsPerMinute": 4,
+  "effects": {
+    "zoom": 0.65,
+    "shake": 0.4,
+    "flash": 0.25,
+    "captions": 0.8,
+    "soundEffects": 0.35
+  },
+  "bgmVolume": 0.045,
+  "reactionBgmMultiplier": 0.3,
+  "autoApproveCuts": false,
+  "autoApproveSpeed": false,
+  "digestEnabled": false,
+  "language": "ja",
+  "whisperModel": "deepdml/faster-whisper-large-v3-turbo-ct2",
+  "render": {
+    "crf": 18,
+    "concurrency": 4,
+    "previewSeconds": 30,
+    "previewScale": 0.5
+  }
+}
