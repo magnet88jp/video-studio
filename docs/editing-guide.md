@@ -30,7 +30,7 @@ idは一意。start/endは元動画秒数、endは排他的。enabled既定true�
 |bgm|asset, volume, loop|BGM。リアクション時に減衰|
 |overlay|asset, overlayKind:image/video|画像・動画重畳|
 
-captionではfontSize、position（bottom/center/top/top-left）、rotation（度）、scale、stroke（px）、shadow（CSS）、entrance（pop/slide/fade/none）、exit（fade/none）、colorを指定できます。通常字幕を常時付ける設計ではありません。
+captionではfontSize、position（bottom/center/top/top-left）、rotation（度）、scale、stroke（px）、shadow（CSS）、entrance（pop/slide/fade/none）、exit（fade/none）、colorを指定できます。これは強調字幕用です。通常字幕はwork/transcript.jsonの発話区間に表示し、edit_plan.jsonへ全件コピーしません。
 
 overlayではwidthPercent、opacity、position、loop。動画オーバーレイの音声はミュートです。音声を使う場合は別seイベントにします。ネットURLは読み込みません。
 

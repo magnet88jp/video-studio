@@ -158,3 +158,7 @@ npm run validate
 ## 文字起こしのみ
 
 `npm run transcribe`（既定small/ja）または `python scripts/transcribe.py input/gameplay0307-1.MP4 --model small --language ja` で `work/transcript.json` を生成します。`--duration 30` は冒頭30秒だけの確認用です。編集プランやRemotionは変更しません。初回モデル取得にはネット接続が必要です。
+
+## エージェント向け編集準備
+
+`python scripts/prepare_edit.py "input/gameplay0307-1.MP4" --check` で予定を確認し、`--check`を外すと専用文字起こし→解析→初期プランを実行します。既存ローカルモデルを優先し、全編の同一入力字幕だけを解析へ渡します。既存プランは保持、`--replan`指定時だけバックアップ後に再生成します。候補要約は`work/edit_brief.json`。このコマンド自体は動画をレンダリングしません。通常字幕の正本は`work/transcript.json`、演出は`work/edit_plan.json`です。

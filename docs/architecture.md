@@ -4,7 +4,8 @@ Pythonは解析、React / Remotionは映像表現、FFmpegは入力調査・作�
 
 ```text
 input/*.MP4（読み取り専用）
-  → scripts/analyze_video.py → src/analysis/pipeline.py
+  → scripts/prepare_edit.py → scripts/transcribe.py（専用文字起こし）
+  → scripts/analyze_video.py --reuse-transcript → src/analysis/pipeline.py
   → work/audio + work/analysis/*.json
   → scripts/build_edit_plan.py → work/edit_plan.json
   → Zod検証 → compileTimeline → source秒からoutputフレームに変換
@@ -37,3 +38,5 @@ Remotion Sequenceは各出力区間に配置し、Videoは元時刻でtrim。0.5
 ## 既存実装
 
 旧FFmpeg版はsrc/ffmpeg_edit.pyとscripts/edit.pyに保持し、work/legacyの旧配列プランを使います。旧work/transcript.json等は新解析の同一ハッシュキャッシュとして利用できます。新しい解析結果はwork/analysisに分離します。
+
+編集依頼の標準手順はAGENTS.mdを参照。通常字幕はwork/transcript.json、解析用の派生データはwork/analysis/transcript.json。prepare_edit.pyは全編・原本ハッシュ・結果ハッシュを確認して解析へ渡し、二重の音声認識を避けます。既存プランは既定で保持します。

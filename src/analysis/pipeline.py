@@ -28,16 +28,38 @@ def video_info(source):
 
 def extract(source,info):
  meta=ANALYSIS/'audio_meta.json'
- if AUDIO.exists() and meta.exists() and read(meta).get('sourceHash')==info['sha256']:return
+ dedicated=WORK/'audio/transcribe_source.json'
+ if AUDIO.exists() and dedicated.exists():
+  d=read(dedicated)
+  if d.get('sourceHash')==info['sha256'] and d.get('audioHash')==digest(AUDIO):
+   save(meta,{'sourceHash':info['sha256'],'sampleRate':16000,'channels':1});return
+ elif AUDIO.exists() and meta.exists() and read(meta).get('sourceHash')==info['sha256']:return
  AUDIO.parent.mkdir(parents=True,exist_ok=True)
  subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(source),'-vn','-ac','1','-ar','16000','-c:a','pcm_s16le',str(AUDIO)],check=True)
  save(meta,{'sourceHash':info['sha256'],'sampleRate':16000,'channels':1,'note':'Mixed track, not isolated commentary'})
+ save(dedicated,{'sourceHash':info['sha256'],'audioHash':digest(AUDIO)})
 
-def transcribe(info,force=False):
+def dedicated_transcript(info):
+ path=WORK/'transcript.json';meta_path=WORK/'transcribe_cache.json'
+ if not path.exists() or not meta_path.exists():return None
+ meta=read(meta_path)
+ if meta.get('partial') or meta.get('key',{}).get('duration') is not None:return None
+ if meta.get('key',{}).get('source',{}).get('sha256')!=info['sha256']:return None
+ if meta.get('outputHash')!=digest(path):return None
+ rows=read(path)
+ if not isinstance(rows,list):return None
+ return [{**u,'id':f'u{i+1:04}','needs_review':True} for i,u in enumerate(rows)]
+
+def transcribe(info,force=False,reuse_only=False):
  target=ANALYSIS/'transcript.json';meta=ANALYSIS/'transcript_meta.json'
+ dedicated=dedicated_transcript(info)
+ if not force and dedicated is not None:
+  save(target,dedicated);save(meta,{'sourceHash':info['sha256'],'status':'automatic_not_manually_verified','method':'scripts/transcribe.py; full-length hash-verified cache'})
+  return dedicated
+ if reuse_only:raise SystemExit('Run scripts/transcribe.py for this complete input first (without --duration). Partial, edited or mismatched caches cannot be reused automatically.')
  if not force and target.exists() and meta.exists() and read(meta).get('sourceHash')==info['sha256'] and read(meta).get('status')!='unavailable':return read(target)
  legacy=WORK/'transcript.json'
- if not force and legacy.exists() and read(legacy).get('source',{}).get('sha256')==info['sha256']:
+ if not force and legacy.exists() and isinstance(read(legacy),dict) and read(legacy).get('source',{}).get('sha256')==info['sha256']:
   data=read(legacy);result=data['utterances'];method=data['method'];status=data['status']
  else:
   result=[];method='faster-whisper int8, independent <=30s windows, word timestamps';status='automatic_not_manually_verified'
@@ -162,10 +184,10 @@ def build_plan(info):
  save(target,plan);print(f'Plan: {len(events)} events; {len(selected)} effects; duration preserved before review.');return plan
 
 def main(mode='analyze'):
- parser=argparse.ArgumentParser();parser.add_argument('--input');parser.add_argument('--force-transcribe',action='store_true');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('--input');parser.add_argument('--force-transcribe',action='store_true');parser.add_argument('--reuse-transcript',action='store_true',help='Require a complete verified scripts/transcribe.py result; never run another ASR');args=parser.parse_args()
  source=source_path(args.input);info=video_info(source);extract(source,info)
  if mode=='plan':build_plan(info);return
- utterances=transcribe(info,args.force_transcribe)
+ utterances=transcribe(info,args.force_transcribe,args.reuse_transcript)
  if mode in ['analyze','silence']:detect_silence(info,utterances)
  if mode in ['analyze','reactions']:detect_reactions(info,utterances)
  after=digest(source);assert after==info['sha256'],'Source changed'
