@@ -21,6 +21,7 @@ WORK = ROOT / 'work'
 OUTPUT = WORK / 'transcript.json'
 AUDIO = WORK / 'audio/commentary.wav'
 META = WORK / 'transcribe_cache.json'
+SOURCE_META = WORK / 'source_identity.json'
 
 
 def load(path):
@@ -36,6 +37,30 @@ def sha256(path):
         for block in iter(lambda: file.read(4 * 1024 * 1024), b''):
             h.update(block)
     return h.hexdigest()
+
+
+def source_identity(path):
+    """Return a cached SHA-256 when path/size/mtime are unchanged.
+
+    Large source videos are hashed only when their filesystem identity changed.
+    """
+    stat = path.stat()
+    base = {
+        'path': str(path),
+        'size': stat.st_size,
+        'mtime_ns': stat.st_mtime_ns,
+    }
+    cached = load(SOURCE_META) or {}
+    if all(cached.get(k) == v for k, v in base.items()) and cached.get('sha256'):
+        return {**base, 'sha256': cached['sha256'], 'hashCached': True}
+    identity = {**base, 'sha256': sha256(path), 'hashCached': False}
+    save(SOURCE_META, {k: identity[k] for k in ('path', 'size', 'mtime_ns', 'sha256')})
+    return identity
+
+
+def source_unchanged(path, identity):
+    stat = path.stat()
+    return stat.st_size == identity['size'] and stat.st_mtime_ns == identity['mtime_ns']
 
 
 def save(path, data):
@@ -139,9 +164,10 @@ def main():
         AUDIO.parent.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise RuntimeError(f'出力ディレクトリを作成できません: {error}') from None
-    before = sha256(source)
-    stat = source.stat()
-    identity = {'path': str(source), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns, 'sha256': before}
+    identity = source_identity(source)
+    before = identity['sha256']
+    if identity.get('hashCached'):
+        print('  元動画SHA-256はsize/mtime一致のキャッシュを再利用します。', flush=True)
     model_path = Path(args.model).expanduser()
     model_identity = str(model_path.resolve()) if model_path.is_dir() else args.model
     key = {'version': 1, 'source': identity, 'model': model_identity, 'language': args.language, 'duration': args.duration}
@@ -201,8 +227,8 @@ def main():
                 last_progress = progress
         if not valid(rows):
             raise RuntimeError('文字起こしの時刻またはテキストが不正なため保存を中止しました。')
-    if sha256(source) != before:
-        raise RuntimeError('実行中に元動画が変更されました。結果の保存を中止しました。')
+    if not source_unchanged(source, identity):
+        raise RuntimeError('実行中に元動画のサイズまたは更新日時が変わりました。結果の保存を中止しました。')
     print('[3/3] Writing transcript.json...', flush=True)
     if OUTPUT.exists() and not (WORK / 'transcript.before-dedicated-script.json').exists():
         shutil.copy2(OUTPUT, WORK / 'transcript.before-dedicated-script.json')

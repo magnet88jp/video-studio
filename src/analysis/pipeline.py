@@ -2,7 +2,7 @@
 import argparse, hashlib, json, math, re, subprocess, sys, wave
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
-WORK=ROOT/'work'; ANALYSIS=WORK/'analysis'; AUDIO=WORK/'audio/commentary.wav'
+WORK=ROOT/'work'; ANALYSIS=WORK/'analysis'; AUDIO=WORK/'audio/commentary.wav'; SOURCE_META=WORK/'source_identity.json'
 def read(p): return json.loads(Path(p).read_text())
 def save(p,obj):
  p=Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(obj,ensure_ascii=False,indent=2)+'\n')
@@ -11,6 +11,19 @@ def digest(p):
  with Path(p).open('rb') as f:
   for block in iter(lambda:f.read(4*1024*1024),b''):h.update(block)
  return h.hexdigest()
+
+def source_identity(p):
+ p=Path(p);st=p.stat();base={'path':str(p),'size':st.st_size,'mtime_ns':st.st_mtime_ns}
+ try:cached=read(SOURCE_META)
+ except (OSError,ValueError):cached={}
+ if all(cached.get(k)==v for k,v in base.items()) and cached.get('sha256'):
+  return {**base,'sha256':cached['sha256'],'hashCached':True}
+ identity={**base,'sha256':digest(p),'hashCached':False}
+ save(SOURCE_META,{k:identity[k] for k in ('path','size','mtime_ns','sha256')})
+ return identity
+
+def source_unchanged(p,identity):
+ st=Path(p).stat();return st.st_size==identity['size'] and st.st_mtime_ns==identity['mtime_ns']
 def source_path(value=None):
  candidates=sorted(p for p in (ROOT/'input').iterdir() if p.suffix.lower()=='.mp4')
  if not candidates: raise SystemExit('input/ にMP4がありません。')
@@ -21,9 +34,11 @@ def source_path(value=None):
 
 def video_info(source):
  probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(source)]))
+ identity=source_identity(source)
+ if identity.get('hashCached'):print('Source SHA-256 cache reused (size/mtime unchanged).')
  v=next(s for s in probe['streams'] if s['codec_type']=='video');a=next((s for s in probe['streams'] if s['codec_type']=='audio'),{})
  num,den=map(float,v['avg_frame_rate'].split('/'));fps=num/den
- result={'source':str(source.relative_to(ROOT)),'sha256':digest(source),'duration':float(probe['format']['duration']),'width':v['width'],'height':v['height'],'fps':fps,'fpsRational':v['avg_frame_rate'],'suggestedFps':60 if 55<fps<=61 else fps,'videoCodec':v['codec_name'],'audioCodec':a.get('codec_name'),'audioChannels':a.get('channels'),'audioSampleRate':a.get('sample_rate'),'bitrate':probe['format'].get('bit_rate'),'probe':probe}
+ result={'source':str(source.relative_to(ROOT)),'sha256':identity['sha256'],'sourceSize':identity['size'],'sourceMtimeNs':identity['mtime_ns'],'duration':float(probe['format']['duration']),'width':v['width'],'height':v['height'],'fps':fps,'fpsRational':v['avg_frame_rate'],'suggestedFps':60 if 55<fps<=61 else fps,'videoCodec':v['codec_name'],'audioCodec':a.get('codec_name'),'audioChannels':a.get('channels'),'audioSampleRate':a.get('sample_rate'),'bitrate':probe['format'].get('bit_rate'),'probe':probe}
  save(ANALYSIS/'video_info.json',result);return result
 
 def extract(source,info):
@@ -190,6 +205,7 @@ def main(mode='analyze'):
  utterances=transcribe(info,args.force_transcribe,args.reuse_transcript)
  if mode in ['analyze','silence']:detect_silence(info,utterances)
  if mode in ['analyze','reactions']:detect_reactions(info,utterances)
- after=digest(source);assert after==info['sha256'],'Source changed'
- save(ANALYSIS/'source_integrity.json',{'source':info['source'],'before':info['sha256'],'after':after,'unchanged':True})
- print('Analysis complete. Source unchanged.')
+ identity={'size':info['sourceSize'],'mtime_ns':info['sourceMtimeNs']}
+ if not source_unchanged(source,identity):raise RuntimeError('Source size/mtime changed during analysis')
+ save(ANALYSIS/'source_integrity.json',{'source':info['source'],'sha256':info['sha256'],'size':info['sourceSize'],'mtime_ns':info['sourceMtimeNs'],'unchanged':True,'check':'size+mtime; SHA-256 cached by source identity'})
+ print('Analysis complete. Source unchanged (size/mtime verified).')
